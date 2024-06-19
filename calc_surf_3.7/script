@@ -1,0 +1,11 @@
+## YOU NEED TO RUN THE FOLLOWING COMMANDS TO LOAD MODULES 
+module load GCC/8.3.0
+module load OpenMPI/3.1.4
+module load IPython/7.9.0-Python-3.7.4
+
+## to wrap fortran code using f2py
+python3 -m numpy.f2py -c kinds.f90 calc_surf.f90 calc_surf_cylin.f90 -m my_calc_surf
+## or you can simply use
+f2py -c kinds.f90 calc_surf.f90 calc_surf_cylin.f90 calc_surf_flat.f90 calc_rup_solid.f90 calc_rup_solid3d.f90 calc_velo.f90 calc_vDw_energy.f90 -m my_calc_surf
+## Note that the dimension of INTENT(INOUT) must be defined.
+cp *** ~/.local/lib/python3.7/site-packages
