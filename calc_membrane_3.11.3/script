@@ -1,0 +1,14 @@
+## YOU NEED TO RUN THE FOLLOWING COMMANDS TO LOAD MODULES 
+module purge
+module load foss/2023a
+module load CMake/3.26.3-GCCcore-12.3.0 
+module load Doxygen/1.9.7-GCCcore-12.3.0 
+module load git/2.41.0-GCCcore-12.3.0-nodocs 
+module load Python/3.11.3-GCCcore-12.3.0
+
+## to wrap fortran code using f2py
+python3 -m numpy.f2py -c kinds.f90 calc_surf.f90  -m my_calc_membrane
+## or you can simply use
+#f2py -c kinds.f90 calc_surf.f90 calc_surf_cylin.f90 calc_surf_flat.f90 calc_rup_solid.f90 calc_rup_solid3d.f90 calc_velo.f90 calc_vDw_energy.f90 -m my_calc_surf
+## Note that the dimension of INTENT(INOUT) must be defined.
+cp *** ~/.local/lib/python3.7/site-packages
