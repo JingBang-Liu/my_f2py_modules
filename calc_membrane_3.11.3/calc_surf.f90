@@ -808,10 +808,6 @@ MODULE my_calc_surf
         rate = input(6)
         output = 0
 
-
-
-
-
         OPEN(1, file=filename)
 
         !! skip lines
@@ -832,6 +828,8 @@ MODULE my_calc_surf
             READ(1,*) xlo, xhi
             READ(1,*) ylo, yhi
             READ(1,*) zlo, zhi
+            ! skip second part of headers
+            READ(1,*)
             ! calculation area is the same as simulation box
             xlo_bound = xlo
             xhi_bound = xhi
@@ -977,73 +975,247 @@ MODULE my_calc_surf
         
     END SUBROUTINE
 
-    !!!! Subroutine output liquid and vapour particle positions
-    SUBROUTINE vapour_liquid(path,input,n,T,time,output)
-        CHARACTER(LEN=*), INTENT(IN) :: path
-        !!!! everything is in reduced unit
-        !!!! input: simulation box boundaries (6), interested area boundaries (6)
-        !!!!        cutoff, boundary (3) (0-f,1-p), rate
-        REAL(REAL64), DIMENSION(17), INTENT(IN) :: input
-        INTEGER, INTENT(IN) :: n
+    !!!! Subroutine that calculates the position of the midplane of the bilipid
+    !!!! membrane by projecting the tails onto the x-y plane
+    !!!! The LAMMPS dump file must have the atoms sorted, i.e. dump_modify sort id
+    !!!! head first, tail last
+    !!!! only works for plannar lipid layer
+    !!!! This calculates for multiple timesteps, but reads from one big file
+    SUBROUTINE calc_midplane_tail_onefile(filename,nhead,ntail,thickness,boundary,&
+        &T,nmol,xcolu,ycolu,time,output)
+        !!!! filename of the 
+        CHARACTER(LEN=*), INTENT(IN) :: filename
+        INTEGER, INTENT(IN) :: nhead ! number of head beads
+        INTEGER, INTENT(IN) :: ntail ! number of tail beads
+        REAL(REAL64), INTENT(IN) :: thickness ! initial guess of thickness
+        INTEGER, DIMENSION(2), INTENT(IN) :: boundary ! 1: periodic, 0: fixed
         INTEGER, INTENT(IN) :: T ! number of timesteps
-        INTEGER, INTENT(IN), DIMENSION(:) :: time
-        !!!! output: surface position [timesteps, N, (type,x,y,z,dens)]
-        !!!!         type 1-vapour 2-liquid
-        REAL(REAL64), DIMENSION(T,n,5), INTENT(OUT) :: output
-        REAL(REAL64), DIMENSION(:,:), ALLOCATABLE :: dens
-        REAL(REAL64) :: rate, den_inter
-        REAL(REAL64), DIMENSION(16) :: input2
-        CHARACTER(LEN=300) :: filename 
-        INTEGER :: i, j
-        CHARACTER(LEN=10) :: cTemp
+        INTEGER, INTENT(IN) :: nmol ! number of lipids
+        INTEGER, INTENT(IN) :: xcolu ! number of x elements
+        INTEGER, INTENT(IN) :: ycolu ! number of y elements
+        !!!! time: init_timestep -- initial timestep of the simulation
+        !!!!       begin_timestep -- first timestep to process
+        !!!!       end_timestep -- final timestep to process
+        !!!!       inter_timestep -- interval between timesteps
+        INTEGER, INTENT(IN), DIMENSION(4) :: time
+        !!!! output: surface position [timesteps, xcolu, ycolu]
+        !!!!         top or bot determined by input(10) (0-bot, 1-top)
+        REAL(REAL64), DIMENSION(T,xcolu,ycolu), INTENT(OUT) :: output
+        REAL(REAL64) :: xlo, xhi, ylo, yhi, zlo, zhi
+        REAL(REAL64) :: xlo_bound, xhi_bound, ylo_bound, yhi_bound, zlo_bound, zhi_bound
+        INTEGER :: i, j, k, s
+        INTEGER :: n ! number of atoms
+        INTEGER :: ix, iy
+        REAL(REAL64) :: dx, dy, thickness_reduced
+        REAL(REAL64) :: pi=3.1415926535897932384626433832795028841971693993751058209749445923078164062
+        INTEGER, DIMENSION(xcolu,ycolu) :: colu_xy
+        REAL(REAL64), DIMENSION(:,:,:), ALLOCATABLE :: cell_xy
+        REAL(REAL64), DIMENSION(nmol,nhead) :: posx_head, posy_head, posz_head
+        REAL(REAL64), DIMENSION(nmol,ntail) :: posx_tail, posy_tail, posz_tail
+        REAL(REAL64), DIMENSION(xcolu,ycolu) :: meanz_tail ! average height of tail beads at one timestep
+        REAL(REAL64) :: trash1, trash2, trash3, tempx, tempy, tempz, trash5, trash6, trash4
+        REAL(REAL64) :: xlen, ylen, zlen, meanz_tail_temp
+        INTEGER :: skip_lines, counter
+        REAL(REAL64), DIMENSION(:), ALLOCATABLE :: posz_temp, posz_ttemp, posz_tttemp
 
-        input2(1) = input(1) ! xlo
-        input2(2) = input(2) ! xhi
-        input2(3) = input(3) ! ylo
-        input2(4) = input(4) ! yhi
-        input2(5) = input(5) ! zlo
-        input2(6) = input(6) ! zhi
-        input2(7) = input(7) ! boundary xlo
-        input2(8) = input(8) ! boundary xhi
-        input2(9) = input(9) ! boundary ylo
-        input2(10) = input(10) ! boundary yhi
-        input2(11) = input(11) ! boundary zlo
-        input2(12) = input(12) ! boundary zhi
-        input2(13) = input(13) ! cutoff
-        input2(14) = input(14) ! boundary 0-f 1-p
-        input2(15) = input(15) ! boundary 
-        input2(16) = input(16) ! boundary
-        rate = input(17)
-        output = 0
+        ! CALL CPU_TIME(begin_time)
+        n = nmol*(nhead+ntail)
+
+        OPEN(1, file=filename)
+
+        !! skip lines
+        skip_lines = (time(2)-time(1))/time(4)
+        DO i=1,skip_lines
+            DO j=1,(9+n)
+                READ(1,*)
+            END DO
+        END DO
 
         DO i=1,T
-            ! CALL CPU_TIME(begin_time)
-            WRITE(cTemp,'(i10)') time(i)
-            filename = path//TRIM(ADJUSTL(cTemp))//'.dat'
-            ALLOCATE(dens(n,4))
-            dens = 0
-            CALL calc_dens(TRIM(ADJUSTL(filename)),input2,n,dens)
-            den_inter = MAXVAL(dens(:,4))*rate
-            DO j=1,n
-                IF (dens(j,4).GT.den_inter) THEN
-                    output(i,j,1) = 2
-                    output(i,j,2) = dens(j,1)
-                    output(i,j,3) = dens(j,2)
-                    output(i,j,4) = dens(j,3)
-                    output(i,j,5) = dens(j,4)
-                ELSE
-                    output(i,j,1) = 1
-                    output(i,j,2) = dens(j,1)
-                    output(i,j,3) = dens(j,2)
-                    output(i,j,4) = dens(j,3)
-                    output(i,j,5) = dens(j,4)
-                END IF
+            ! skip first part of headers
+            DO j=1,5
+                READ(1,*)
             END DO
-            DEALLOCATE(dens)
+            ! read simulation box dimensions
+            READ(1,*) xlo, xhi
+            READ(1,*) ylo, yhi
+            READ(1,*) zlo, zhi
+            ! skip second part of headers
+            READ(1,*)
+            ! calculation area is the same as simulation box
+            xlo_bound = xlo
+            xhi_bound = xhi
+            ylo_bound = ylo
+            yhi_bound = yhi
+            zlo_bound = zlo
+            zhi_bound = zhi
+            ! box length
+            xlen = xhi - xlo
+            ylen = yhi - ylo
+            zlen = zhi - zlo
+            !! allocate position vectors
+            posx_head = 0
+            posy_head = 0
+            posz_head = 0
+            posx_tail = 0
+            posy_tail = 0
+            posz_tail = 0
+            !! calculate reduced thickness
+            thickness_reduced = thickness/zlen
+            IF (thickness_reduced.GE.0.5) THEN
+                PRINT*, "membrane thickness greater than simulation cell! Reduce thickness"
+            END IF
+            DO j=1,nmol
+                DO k=1,nhead
+                    READ(1,*) trash1, trash2, trash3, tempx, tempy, tempz, trash5,&
+                    & trash6, trash4
+                    posx_head(j,k) = tempx * xlen + xlo
+                    posy_head(j,k) = tempy * ylen + ylo
+                    posz_head(j,k) = tempz
+                END DO
+                DO k=1,ntail
+                    READ(1,*) trash1, trash2, trash3, tempx, tempy, tempz, trash5,&
+                    & trash6, trash4
+                    posx_tail(j,k) = tempx * xlen + xlo
+                    posy_tail(j,k) = tempy * ylen + ylo
+                    posz_tail(j,k) = tempz
+                END DO
+            END DO
+
+            ! check nothing is out of simulation box, only for periodic boundaries
+            IF (boundary(1).EQ.1) THEN
+                DO j=1,nmol
+                    DO k=1,nhead
+                        IF ((posx_head(j,k).LT.xlo_bound) .OR. (posx_head(j,k).GT.xhi_bound)) THEN
+                            posx_head(j,k) = posx_head(j,k) - sign((xhi_bound-xlo_bound),(posx_head(j,k)-xlo_bound))
+                        END IF
+                    END DO
+                    DO k=1,ntail
+                        IF ((posx_tail(j,k).LT.xlo_bound) .OR. (posx_tail(j,k).GT.xhi_bound)) THEN
+                            posx_tail(j,k) = posx_tail(j,k) - sign((xhi_bound-xlo_bound),(posx_tail(j,k)-xlo_bound))
+                        END IF
+                    END DO
+                END DO
+            END IF
+            IF (boundary(2).EQ.1) THEN
+                DO j=1,nmol
+                    DO k=1,nhead
+                        IF ((posy_head(j,k).LT.ylo_bound) .OR. (posy_head(j,k).GT.yhi_bound)) THEN
+                            posy_head(j,k) = posy_head(j,k) - sign((yhi_bound-ylo_bound),(posy_head(j,k)-ylo_bound))
+                        END IF
+                    END DO
+                    DO k=1,ntail
+                        IF ((posy_tail(j,k).LT.ylo_bound) .OR. (posy_tail(j,k).GT.yhi_bound)) THEN
+                            posy_tail(j,k) = posy_tail(j,k) - sign((yhi_bound-ylo_bound),(posy_tail(j,k)-ylo_bound))
+                        END IF
+                    END DO
+                END DO
+            END IF
+
+            meanz_tail = 0
+            dx = (xhi_bound-xlo_bound)/REAL(xcolu)
+            dy = (yhi_bound-ylo_bound)/REAL(ycolu)
+            colu_xy = 0
+            ALLOCATE(cell_xy(INT(n/xcolu/ycolu*4.0d0),xcolu,ycolu))
+            cell_xy = 0
+            DO j=1,nmol
+                DO k=1,ntail
+                    ix = INT(FLOOR((posx_tail(j,k)-xlo_bound)/dx)) + 1
+                    iy = INT(FLOOR((posy_tail(j,k)-ylo_bound)/dy)) + 1
+                    IF (ix.GT.xcolu) THEN
+                        ix = xcolu
+                    ELSE IF (ix.LT.1) THEN
+                        ix = 1
+                    END IF
+                    IF (iy.GT.ycolu) THEN
+                        iy = ycolu
+                    ELSE IF (iy.LT.1) THEN
+                        iy = 1
+                    END IF
+                    colu_xy(ix,iy) = colu_xy(ix,iy) + 1
+                    cell_xy(INT(colu_xy(ix,iy)),ix,iy) = posz_tail(j,k)
+                END DO
+            END DO
+            ALLOCATE(posz_tttemp(xcolu*ycolu))
+            DO j=1,xcolu
+                DO k=1,ycolu
+                    ALLOCATE(posz_temp(colu_xy(j,k)))
+                    posz_temp(:) = cell_xy(1:colu_xy(j,k),j,k)
+                    posz_temp = posz_temp*2.0d0*pi-pi
+                    meanz_tail(j,k) = (ATAN2(SUM(SIN(posz_temp))/colu_xy(j,k),&
+                                           &SUM(COS(posz_temp))/colu_xy(j,k))&
+                                    &+pi)/2.0d0/pi
+                    posz_temp = 0
+                    counter = 0
+                    IF ((meanz_tail(j,k)-thickness_reduced).LT.0.0d0) THEN
+                        DO s=1,colu_xy(j,k)
+                            IF ((cell_xy(s,j,k).GT.(meanz_tail(j,k)+thickness_reduced))&
+                            &.AND.(cell_xy(s,j,k).LT.(1.0d0-(thickness_reduced-meanz_tail(j,k))))) THEN
+                                colu_xy(j,k) = colu_xy(j,k) - 1
+                            ELSE
+                                counter = counter + 1
+                                posz_temp(counter) = cell_xy(s,j,k)
+                            END IF
+                        END DO
+                    ELSEIF ((meanz_tail(j,k)+thickness_reduced).GE.1.0d0) THEN
+                        DO s=1,colu_xy(j,k)
+                            IF ((cell_xy(s,j,k).GT.(thickness_reduced-(1.0d0-meanz_tail(j,k))))&
+                            &.AND.(cell_xy(s,j,k).LT.(meanz_tail(j,k)-thickness_reduced))) THEN
+                                colu_xy(j,k) = colu_xy(j,k) - 1
+                            ELSE
+                                counter = counter + 1
+                                posz_temp(counter) = cell_xy(s,j,k)
+                            END IF
+                        END DO
+                    ELSE
+                        DO s=1,colu_xy(j,k)
+                            IF ((cell_xy(s,j,k).GE.(meanz_tail(j,k)-thickness_reduced))&
+                            &.AND.(cell_xy(s,j,k).LE.(meanz_tail(j,k)+thickness_reduced))) THEN
+                                counter = counter + 1
+                                posz_temp(counter) = cell_xy(s,j,k)
+                            ELSE
+                                colu_xy(j,k) = colu_xy(j,k) - 1
+                            END IF
+                        END DO
+                    END IF
+                    ALLOCATE(posz_ttemp(colu_xy(j,k)))
+                    posz_ttemp(:) = posz_temp(1:colu_xy(j,k))
+                    DEALLOCATE(posz_temp)
+                    posz_ttemp = posz_ttemp*2.0d0*pi-pi
+                    meanz_tail(j,k) = (ATAN2(SUM(SIN(posz_ttemp))/colu_xy(j,k),&
+                                           &SUM(COS(posz_ttemp))/colu_xy(j,k))&
+                                    &+pi)/2.0d0/pi
+                    DEALLOCATE(posz_ttemp)
+                    posz_tttemp((k-1)*ycolu+j) = meanz_tail(j,k)
+                END DO
+            END DO
+            posz_tttemp = posz_tttemp*2.0d0*pi-pi
+            meanz_tail_temp = (ATAN2(SUM(SIN(posz_tttemp))/colu_xy(j,k),&
+                                    &SUM(COS(posz_tttemp))/colu_xy(j,k))&
+                            &+pi)/2.0d0/pi
+            DEALLOCATE(posz_tttemp)
+            meanz_tail(:,:) = meanz_tail(:,:) + (0.5-meanz_tail_temp)
+            DO j=1,xcolu
+                DO k=1,ycolu
+                    IF (meanz_tail(j,k).GT.1.0d0) THEN
+                        meanz_tail(j,k) = meanz_tail(j,k) - 1.0d0
+                    ELSEIF (meanz_tail(j,k).LT.0.0d0) THEN
+                        meanz_tail(j,k) = meanz_tail(j,k) + 1.0d0
+                    END IF
+                END DO
+            END DO
+            output(i,:,:) = meanz_tail(:,:) * zlen + zlo
+            DEALLOCATE(cell_xy)
+
             ! CALL CPU_TIME(end_time)
             ! PRINT*, end_time-begin_time
+
         END DO
-        
+
+
+        CLOSE(1)
+
+
     END SUBROUTINE
 
 END MODULE
